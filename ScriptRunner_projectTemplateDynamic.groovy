@@ -5,6 +5,61 @@ import com.atlassian.jira.bc.project.ProjectService
 import com.atlassian.jira.bc.project.ProjectCreationData
 import com.atlassian.jira.project.Project
 
+import com.atlassian.jira.component.ComponentAccessor
+import com.atlassian.jira.project.Project
+import com.atlassian.jira.project.ProjectManager
+
+def getTemplate(String groupName) {
+    ProjectManager projectManager = ComponentAccessor.getProjectManager()
+    Project templateProject = projectManager.getProjectObjByKey("TEMPLATE")
+    def templateFields = templateProject.getCustomFieldObjects()
+
+    // Filter the list of template fields based on the user's group membership
+    def user = ComponentAccessor.getJiraAuthenticationContext().getLoggedInUser()
+    def userGroups = ComponentAccessor.getUserUtil().getGroupNamesForUser(user)
+    def filteredFields = templateFields.findAll { field ->
+        def allowedGroups = field.getConfigurationSchemes().find { scheme ->
+            scheme.getName() == "Allowed Groups"
+        }.getAssociatedValues("Groups")
+        allowedGroups.any { group -> userGroups.contains(group) }
+    }
+
+    return filteredFields.collect { field -> field.getName() }
+}
+
+def updateCustomFields(Project project, String template) {
+    def templateProject = ComponentAccessor.getProjectManager().getProjectObjByKey("TEMPLATE")
+    def templateFields = templateProject.getCustomFieldObjects()
+
+    def customFieldManager = ComponentAccessor.getCustomFieldManager()
+    def customFields = customFieldManager.getCustomFieldObjects(project)
+
+    // Map the custom fields to their corresponding template fields
+    def fieldMap = [:]
+    customFields.each { field ->
+        def templateField = templateFields.find { f -> f.getName() == field.getName() }
+        if (templateField) {
+            fieldMap[field] = templateField
+        }
+    }
+
+    // Update the values of the custom fields based on the template
+    def issueManager = ComponentAccessor.getIssueManager()
+    def issueService = ComponentAccessor.getIssueService()
+    def issues = issueManager.getIssueObjects(project.getIssues())
+    issues.each { issue ->
+        def issueInputParameters = issueService.newIssueInputParameters()
+        fieldMap.each { customField, templateField ->
+            def value = templateField.getValue(issue)
+            if (value) {
+                issueInputParameters.addCustomFieldValue(customField.getIdAsLong(), value)
+            }
+        }
+        issueService.validateUpdate(user, issue.getId(), issueInputParameters)
+    }
+}
+
+
 // Get the GroupManager
 def groupManager = ComponentAccessor.getComponent(GroupManager)
 
